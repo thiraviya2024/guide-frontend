@@ -1,9 +1,7 @@
 // ============================================================
 // Auth service.
-// IMPORTANT: the backend /auth endpoints are currently stubs that
-// return { message: "..." } with NO token and NO user object.
-// We call them for real, but we NEVER treat the call as a successful
-// login. `backendAuthAvailable()` lets the UI show an honest state.
+// JWT auth is owned by the deployed backend. This module keeps the frontend
+// aligned with its documented request contract.
 // ============================================================
 import { apiClient } from "./api"
 import type { Role } from "@/types"
@@ -14,16 +12,17 @@ export interface LoginPayload {
 }
 
 export interface RegisterPayload {
-  full_name: string
+  name: string
   email: string
   password: string
-  phone?: string
   date_of_birth?: string
   gender?: string
   role?: Role
+  specialty?: string
+  qualification?: string
+  registration_identifier?: string
 }
 
-/** Raw stub response shape currently returned by the backend. */
 export interface AuthStubResponse {
   message?: string
   access_token?: string
@@ -32,7 +31,6 @@ export interface AuthStubResponse {
   [key: string]: unknown
 }
 
-/** Returns true only if the response actually contains a usable token. */
 export function responseHasRealToken(res: AuthStubResponse | null): boolean {
   return Boolean(res && (res.access_token || res.token))
 }
@@ -47,4 +45,20 @@ export const authService = {
   async logout(): Promise<AuthStubResponse> {
     return apiClient.post<AuthStubResponse>("/auth/logout", {})
   },
+  async firebaseLogin(idToken: string): Promise<AuthStubResponse> {
+    return apiClient.post<AuthStubResponse>("/auth/firebase", { id_token: idToken })
+  },
+}
+
+export function authToken(response: AuthStubResponse): string | null {
+  return typeof response.access_token === "string" ? response.access_token : typeof response.token === "string" ? response.token : null
+}
+
+export function authUser(response: AuthStubResponse): Record<string, unknown> {
+  if (response.user && typeof response.user === "object") return response.user as Record<string, unknown>
+  if (response.data && typeof response.data === "object") {
+    const data = response.data as Record<string, unknown>
+    return data.user && typeof data.user === "object" ? data.user as Record<string, unknown> : data
+  }
+  return response
 }

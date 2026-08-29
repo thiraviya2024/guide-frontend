@@ -1,23 +1,20 @@
 // ============================================================
 // LIFE SAVER — shared types
 // All shapes are derived from the real FastAPI backend at
-// https://lipidai-backend-docker.onrender.com/api/v1
+// https://guide-platform-mmua.onrender.com/api/v1
 // Never invent fields that the backend does not return.
 // ============================================================
 
 export type Role = "patient" | "doctor" | "admin"
 
-// ---------- Session (transparent role explorer) ----------
-// The backend /auth endpoints are currently non-functional stubs
-// (they return { message: "Login endpoint" } with no token/user).
-// We therefore never claim authentication succeeded. Instead we
-// store a clearly-labelled local exploration session.
-export interface ExplorerSession {
+// ---------- Authenticated session ----------
+export interface Session {
   role: Role
   displayName: string
   email?: string
-  // true only if a real backend token was ever issued (currently never)
+  firebaseUid?: string
   authenticated: boolean
+  authProvider: "firebase"
   createdAt: string
 }
 
@@ -96,6 +93,18 @@ export interface AnalysisResult {
   detected_category?: string
   report_type?: string
   [key: string]: unknown
+}
+
+/** Persisted-report payloads are dynamic backend envelopes. `raw` remains available
+ * while the normalized analysis drives the patient UI. */
+export interface PersistedReport {
+  id: string
+  filename?: string
+  module?: string
+  status?: string
+  analysis: AnalysisResult
+  aiExplanation?: string
+  raw: Record<string, unknown>
 }
 
 // ---------- /report/ai-explain ----------
@@ -188,4 +197,5 @@ export interface ApiError {
   detail?: unknown
   isNetwork?: boolean
   isTimeout?: boolean
+  isAborted?: boolean
 }

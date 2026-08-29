@@ -214,7 +214,7 @@ export const aiService = {
   async status(): Promise<AiStatus> {
     return apiClient.get<AiStatus>("/ai/status", { timeout: 60_000 })
   },
-  async analyze(content: string, context?: Record<string, unknown>): Promise<string> {
+  async analyze(content: string, context?: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const userMessage = content.trim()
     const report = context?.report_analysis as {
       results?: unknown
@@ -244,8 +244,10 @@ export const aiService = {
 
     if (process.env.NODE_ENV === "development") console.debug("[LIFE SAVER] AI request payload", body)
 
-    const result = await apiClient.post<AiAnalyzeResponse>("/ai/analyze", body, { timeout: 180_000 })
-    return extractText(result) || "AI-assisted medical information, not a diagnosis. Please try again with a more specific question."
+    const result = await apiClient.post<AiAnalyzeResponse>("/ai/analyze", body, { timeout: 180_000, signal })
+    const answer = extractText(result)
+    if (!answer) throw new Error("The AI service did not return an answer.")
+    return answer
   },
   async consensus(content: string, context?: Record<string, unknown>): Promise<string> {
     const userMessage = content.trim()
@@ -253,7 +255,9 @@ export const aiService = {
       ? `${userMessage}\n\nReport context:\n${JSON.stringify(context.report_analysis ?? context)}`
       : userMessage
     const result = await apiClient.post<AiAnalyzeResponse>("/ai/consensus", { prompt }, { timeout: 180_000 })
-    return extractText(result) || "AI-assisted medical information, not a diagnosis. Please try again with a more specific question."
+    const answer = extractText(result)
+    if (!answer) throw new Error("The AI service did not return an answer.")
+    return answer
   },
 }
 

@@ -1,67 +1,103 @@
 "use client"
 
-import { FormEvent, useState } from "react"
-import { ArrowLeft, Eye, EyeOff, LockKeyhole, Mail, ShieldCheck } from "lucide-react"
+import { FormEvent, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, ShieldCheck } from "lucide-react"
 import { BrandLogo } from "@/components/medical/brand-logo"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { cn } from "@/lib/utils"
 import { useSession } from "@/components/providers/session-provider"
 import type { Role } from "@/types"
+import { ApiRequestError } from "@/services/api"
+import { authService, authToken, authUser, type AuthStubResponse } from "@/services/auth"
+import { createFirebaseUser, firebaseErrorMessage, getFirebaseIdToken, signInWithFirebaseEmail, signInWithGoogle, signOutFromFirebase } from "@/lib/firebase"
+import type { User } from "firebase/auth"
 
-const roles: { value: Role; label: string; note: string }[] = [
-  { value: "patient", label: "Patient", note: "Virtual medical assistant" },
-  { value: "doctor", label: "Doctor", note: "Dataset and report workspace" },
-  { value: "admin", label: "Admin", note: "System operations" },
-]
+const authDebug = (message: string) => { if (process.env.NODE_ENV !== "production") console.info(`[LIFE SAVER auth] ${message}`) }
+const firebaseErrorCode = (error: unknown) => typeof error === "object" && error && "code" in error ? String(error.code) : "unknown"
+
+function backendAuthError(error: unknown) {
+  if (error instanceof ApiRequestError) {
+    if (error.status === 401) return "Authentication failed. Please sign in again."
+    if (error.status === 500) return "Authentication service is temporarily unavailable."
+  }
+  return error instanceof Error ? error.message : "Unable to complete authentication. Please try again."
+}
+
+function roleFromBackend(response: AuthStubResponse) {
+  const user = authUser(response)
+  const candidate = String(user.role ?? user.user_role ?? response.role ?? "patient").toLowerCase()
+  const role: Role = candidate === "doctor" || candidate === "admin" ? candidate : "patient"
+  return { role, displayName: String(user.name ?? user.full_name ?? user.display_name ?? "Patient"), email: typeof user.email === "string" ? user.email : undefined }
+}
 
 export default function AuthPage() {
-  const { startExplorer } = useSession()
-  const [role, setRole] = useState<Role>("patient")
+  const { startAuthenticatedSession, endSession } = useSession()
+  const router = useRouter()
+  const [mode, setMode] = useState<"signin" | "signup">("signin")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [showPassword, setShowPassword] = useState(false)
-  const [notice, setNotice] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const exchangingUsers = useRef(new Set<string>())
+  const exchangedUsers = useRef(new Set<string>())
+  const signingUp = mode === "signup"
 
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault()
-    const name = email.split("@")[0]?.replace(/[._-]/g, " ") || "Explorer"
-    startExplorer(role, name.replace(/\b\w/g, (char) => char.toUpperCase()), email)
-    setNotice("Demo session started. Backend authentication is not connected yet.")
-    window.setTimeout(() => window.location.assign(role === "patient" ? "/app" : `/app?role=${role}`), 400)
+  function establish(response: AuthStubResponse, user: User) {
+    const token = authToken(response)
+    if (!token) throw new Error("The authentication service did not return a LIFE SAVER session token.")
+    const identity = roleFromBackend(response)
+    startAuthenticatedSession(identity.role, identity.displayName, identity.email ?? user.email ?? undefined, user.uid, token)
+    router.replace(`/${identity.role}`)
+  }
+  async function exchange(user: User) {
+    if (exchangedUsers.current.has(user.uid) || exchangingUsers.current.has(user.uid)) {
+      authDebug("Skipping duplicate Firebase exchange")
+      return
+    }
+    exchangingUsers.current.add(user.uid)
+    try {
+      authDebug("Backend session exchange started")
+      establish(await authService.firebaseLogin(await getFirebaseIdToken(user)), user)
+      exchangedUsers.current.add(user.uid)
+      authDebug("Backend session exchange successful")
+    } catch (error) {
+      authDebug(`Backend session exchange failed: ${error instanceof ApiRequestError ? error.status : "unknown"}`)
+      throw error
+    } finally { exchangingUsers.current.delete(user.uid) }
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("")
+    try {
+      let user: User
+      if (signingUp) {
+        authDebug("Signup started")
+        // A previous development session must not be mistaken for a successful signup.
+        await endSession()
+        user = await createFirebaseUser(email, password)
+        authDebug("Firebase signup successful")
+      } else {
+        user = await signInWithFirebaseEmail(email, password)
+      }
+      try { await exchange(user) } catch (backendError) { await signOutFromFirebase(); setError(backendAuthError(backendError)) }
+    } catch (firebaseError) { authDebug(`Firebase ${signingUp ? "signup" : "sign-in"} failed: ${firebaseErrorCode(firebaseError)}`); setError(firebaseErrorMessage(firebaseError)) } finally { setBusy(false) }
+  }
+  async function continueWithGoogle() {
+    setBusy(true); setError("")
+    try { const user = await signInWithGoogle(); try { await exchange(user) } catch (backendError) { await signOutFromFirebase(); setError(backendAuthError(backendError)) } }
+    catch (firebaseError) { setError(firebaseErrorMessage(firebaseError)) } finally { setBusy(false) }
+  }
+  async function signOutAndStartOver() {
+    setBusy(true); setError("")
+    try { await endSession() } finally { setBusy(false) }
   }
 
-  return (
-    <main className="min-h-screen bg-background px-4 py-8 sm:px-6">
-      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-6xl items-center justify-center">
-        <div className="grid w-full overflow-hidden rounded-3xl border border-border bg-card shadow-xl lg:grid-cols-[0.9fr_1.1fr]">
-          <section className="hidden bg-primary p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-between">
-            <div><BrandLogo className="text-primary-foreground" /></div>
-            <div className="max-w-sm">
-              <p className="text-sm font-medium text-primary-foreground/70">VIRTUAL MEDICAL ASSISTANT</p>
-              <h1 className="mt-4 text-4xl font-semibold tracking-tight">Clearer health decisions start with better understanding.</h1>
-              <p className="mt-5 leading-relaxed text-primary-foreground/75">Upload a report, understand the signals, and prepare a better conversation with a qualified healthcare professional.</p>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-primary-foreground/70"><ShieldCheck className="h-4 w-4" /> AI-assisted interpretation, not diagnosis</div>
-          </section>
-          <section className="p-6 sm:p-10 lg:p-14">
-            <a href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "mb-10 -ml-3 gap-2")}><ArrowLeft className="h-4 w-4" /> Back home</a>
-            <div className="mb-8 lg:hidden"><BrandLogo /></div>
-            <p className="text-sm font-medium text-primary">DEMO LOGIN</p>
-            <h2 className="mt-2 text-3xl font-semibold tracking-tight">Welcome back</h2>
-            <p className="mt-2 text-muted-foreground">Your AI-powered medical assistant is ready.</p>
-            <form onSubmit={handleSubmit} className="mt-8 space-y-5">
-              <div className="space-y-2"><Label htmlFor="email">Email</Label><div className="relative"><Mail className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" /><Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="pl-9" /></div></div>
-              <div className="space-y-2"><Label htmlFor="password">Password</Label><div className="relative"><LockKeyhole className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" /><Input id="password" type={showPassword ? "text" : "password"} required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="pl-9 pr-10" /><button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-3 top-2.5 text-muted-foreground" aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></div>
-              <div className="rounded-2xl border border-border bg-muted/40 p-4"><p className="text-sm font-semibold">Choose demo role</p><div className="mt-3 grid grid-cols-3 gap-2">{roles.map((item) => <button type="button" key={item.value} onClick={() => setRole(item.value)} className={cn("rounded-xl border px-2 py-3 text-left transition-colors", role === item.value ? "border-primary bg-primary/10 text-primary" : "border-border bg-background hover:bg-muted")}><span className="block text-sm font-medium">{item.label}</span><span className="mt-1 block text-[11px] leading-tight text-muted-foreground">{item.note}</span></button>)}</div></div>
-              <Button type="submit" className="w-full">Sign In as {roles.find((item) => item.value === role)?.label}</Button>
-              {notice && <p className="rounded-xl bg-accent/10 p-3 text-sm text-accent-foreground">{notice}</p>}
-            </form>
-            <p className="mt-8 text-center text-xs leading-relaxed text-muted-foreground">Demo access only. Real authentication will connect when the backend auth endpoints are implemented.</p>
-          </section>
-        </div>
-      </div>
-    </main>
-  )
+  return <main className="min-h-screen bg-background px-4 py-8 sm:px-6"><div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl overflow-hidden rounded-3xl border bg-card shadow-xl lg:grid-cols-[.9fr_1.1fr]">
+    <section className="hidden bg-primary p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-between"><BrandLogo className="text-primary-foreground" /><div><p className="text-sm font-medium text-primary-foreground/70">MEDICAL AI PLATFORM</p><h1 className="mt-4 text-4xl font-semibold">Clearer health decisions start with better understanding.</h1><p className="mt-5 text-primary-foreground/75">AI-assisted medical information to help you prepare for conversations with qualified healthcare professionals.</p></div><p className="flex items-center gap-2 text-sm text-primary-foreground/70"><ShieldCheck className="h-4 w-4" />Information, not a diagnosis</p></section>
+    <section className="p-6 sm:p-10 lg:p-14"><a href="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" />Back home</a><div className="mt-10 lg:hidden"><BrandLogo /></div><h2 className="mt-8 text-3xl font-semibold">{signingUp ? "Create account" : "Sign in"}</h2><p className="mt-2 text-muted-foreground">{signingUp ? "Create your LIFE SAVER account to get started." : "Use your LIFE SAVER account to continue."}</p>
+      <Button className="mt-6 w-full" disabled={busy} type="button" variant="outline" onClick={() => void continueWithGoogle()}>Continue with Google</Button><div className="my-6 flex items-center gap-3 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">or</div>
+      <form className="grid gap-3" onSubmit={submit}><Input aria-label="Email" autoComplete="email" type="email" placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} required /><Input aria-label="Password" autoComplete={signingUp ? "new-password" : "current-password"} type="password" minLength={signingUp ? 6 : undefined} placeholder="Password" value={password} onChange={(event) => setPassword(event.target.value)} required /><Button disabled={busy} type="submit">{busy ? "Please wait…" : signingUp ? "Create account" : "Sign in"}</Button>{error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}</form>
+      <p className="mt-6 text-center text-sm text-muted-foreground">{signingUp ? "Already have an account?" : "New to LIFE SAVER?"} <button className="text-primary hover:underline" type="button" disabled={busy} onClick={() => { setMode(signingUp ? "signin" : "signup"); setError("") }}>{signingUp ? "Sign in" : "Create account"}</button></p><button className="mt-4 w-full text-sm text-muted-foreground hover:text-foreground hover:underline" type="button" disabled={busy} onClick={() => void signOutAndStartOver()}>Sign out and start over</button>
+    </section>
+  </div></main>
 }

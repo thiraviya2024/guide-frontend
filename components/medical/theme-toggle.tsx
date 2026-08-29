@@ -10,7 +10,9 @@ export function ThemeToggle({ className }: { className?: string }) {
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
-  const isDark = resolvedTheme === "dark"
+  // `resolvedTheme` can differ before hydration when a stored preference exists.
+  // Keep the initial markup deterministic, then apply the real preference after mount.
+  const isDark = mounted && resolvedTheme === "dark"
 
   return (
     <Button
