@@ -199,3 +199,34 @@ export interface ApiError {
   isTimeout?: boolean
   isAborted?: boolean
 }
+
+// ---------- /dengue/predict ----------
+// The prediction service owns all clinical interpretation. These are the only
+// patient values the prototype model accepts.
+export interface DengueFeatures {
+  age?: number
+  hemoglobin_g_dl?: number
+  platelet_count?: number
+  platelet_distribution_width?: number
+}
+
+export interface DenguePredictionResponse {
+  disease?: string
+  model_name?: string
+  model_version?: string
+  prototype_status?: string
+  model_features?: string[]
+  features_used?: Record<string, unknown> | string[]
+  missing_features?: string[]
+  clinical_evidence?: Record<string, unknown> | Array<Record<string, unknown>>
+  ignored_features?: string[]
+  excluded_from_model?: string[]
+  disclaimer?: string
+  prediction?: string | boolean | null
+  probability?: number | null
+  risk_level?: string | null
+  risk_threshold?: number | null
+  status?: string
+  explanation?: string
+  [key: string]: unknown
+}
